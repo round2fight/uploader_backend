@@ -15,6 +15,10 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # Ensure the upload folder exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+@app.route('/api/ping', methods=['POST','GET'])
+def ping():
+    return jsonify({"message": "pong"})
+
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
 
