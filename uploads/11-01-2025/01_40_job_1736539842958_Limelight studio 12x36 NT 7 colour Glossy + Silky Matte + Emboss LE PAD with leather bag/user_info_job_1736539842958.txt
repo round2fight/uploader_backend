@@ -1,3 +1,0 @@
-Username: John Doe
-Company: ACME Company
-Job_ID: job_1736539842958

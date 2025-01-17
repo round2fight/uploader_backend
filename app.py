@@ -21,28 +21,28 @@ def ping():
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
-
-    # username = request.form.get('username')
-    # company_name = request.form.get('companyName')
-
-    # if not username or not company_name:
-    #     return {"error": "Username and company name are required"}, 400
-
-    # user_info_path = os.path.join(UPLOAD_FOLDER, "user_info.txt")
-    # with open(user_info_path, "a") as f:
-    #     f.write(f"Username: {username}, Company: {company_name}\n")
-
     if 'files' not in request.files:
         return jsonify({"error": "No files part in the request"}), 400
 
+    # Get folder name from request
+    new_folder_name = request.form.get('newFolderName')
+    if not new_folder_name:
+        return jsonify({"error": "Missing folder name"}), 400
+
+    upload_path = os.path.join(UPLOAD_FOLDER, new_folder_name)  
+    os.makedirs(upload_path, exist_ok=True)  # Create folder if it doesn't exist
+
     files = request.files.getlist('files')  # Accept multiple files
+    
     for file in files:
         if file:
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            file.save(file_path)
+            relative_path = file.filename  # Preserve original folder structure
+            file_path = os.path.join(upload_path, relative_path)
+            
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)  # Ensure subfolder exists
+            file.save(file_path)  # Save file in correct subfolder
 
-    return jsonify({"message": "Files uploaded successfully!"}), 200
+    return jsonify({"message": f"Files uploaded to {new_folder_name} successfully!"}), 200
 
 if __name__ == '__main__':
     app.run(debug=True)

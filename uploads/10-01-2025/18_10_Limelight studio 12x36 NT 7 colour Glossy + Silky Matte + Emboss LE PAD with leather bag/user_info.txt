@@ -1,2 +1,0 @@
-Username: John Doe
-Company: ACME Company
