@@ -5,8 +5,7 @@ import os
 
 app = Flask(__name__)
 CORS(app) 
-# CORS(app, origins=["http://localhost:3000"])  # Allow only your React app
-
+# CORS(app, origins=["http://localhost:3000","https://meowtest.work.gd"])
 
 # Configure upload folder
 UPLOAD_FOLDER = './uploads'
