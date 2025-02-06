@@ -14,6 +14,14 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # Ensure the upload folder exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Increase the max request size (10GB)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024 * 1024  # 10GB
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return "File too large", 413
+
+
 @app.route('/api/ping', methods=['POST','GET'])
 def ping():
     return jsonify({"message": "pong"})
