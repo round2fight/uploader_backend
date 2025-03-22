@@ -31,16 +31,6 @@ def request_entity_too_large(error):
 def ping():
     return jsonify({"message": "pong"})
 
-# 🔹 Remove empty directories from SSD after moving the file
-def remove_empty_dirs(path, root):
-    while path != root:  # Don't delete the root SSD folder
-        try:
-            os.rmdir(path)  # Removes only if empty
-            logging.info(f"🗑️ Removed empty folder: {path}")
-        except OSError:
-            break  # Directory is not empty, stop
-        path = os.path.dirname(path)  # Move up one level
-
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -89,8 +79,9 @@ def upload_chunk():
             shutil.move(file_path, final_hdd_path)
             logging.info(f"✅ File {filename} moved to HDD: {final_hdd_path}")
 
-            # Call function to remove empty folders
-            # remove_empty_dirs(os.path.dirname(file_path), SSD_UPLOAD_FOLDER)
+            # shutil.copy2(file_path, final_hdd_path)  # Copy file with metadata
+            # os.remove(file_path)  # Delete original file from SSD
+            # logging.info(f"✅ Copied and deleted file from SSD: {file_path}")
 
         return jsonify({"message": f"Chunk {chunk_index + 1}/{total_chunks} received"}), 200
 
