@@ -9,7 +9,7 @@ CORS(app)  # Enable CORS for frontend communication
 
 # Paths for SSD (temporary storage) and HDD (final storage)
 SSD_UPLOAD_FOLDER = "./uploads/ssd_temp"  # Fast temporary storage
-HDD_STORAGE_FOLDER = "./uploads/hdd_storage"   # Final HDD storage location
+HDD_STORAGE_FOLDER = "./mnt/uploads/data"   # Final HDD storage location
 
 # Ensure directories exist
 os.makedirs(SSD_UPLOAD_FOLDER, exist_ok=True)
@@ -32,56 +32,66 @@ def ping():
     return jsonify({"message": "pong"})
 
 
-
 @app.route("/api/upload", methods=["POST"])
 def upload_chunk():
     try:
-        # Validate request
         if "chunk" not in request.files:
             return jsonify({"error": "No chunk file provided"}), 400
 
         chunk = request.files["chunk"]
         filename = request.form.get("filename")
-        relative_path = request.form.get("relativePath")
+        relative_path = request.form.get("relativePath")  # Keep original folder structure
         chunk_index = request.form.get("chunkIndex")
         total_chunks = request.form.get("totalChunks")
         new_folder_name = request.form.get("newFolderName")
 
-        # Ensure all required form data is present
+        # Validate required form data
         if not all([filename, relative_path, chunk_index, total_chunks, new_folder_name]):
             return jsonify({"error": "Missing required form data"}), 400
 
-        # Convert chunk indexes to integers
         chunk_index = int(chunk_index)
         total_chunks = int(total_chunks)
 
-        # Temporary SSD path
-        ssd_upload_dir = os.path.join(SSD_UPLOAD_FOLDER, new_folder_name)
-        file_path = os.path.join(ssd_upload_dir, relative_path)
+        # ✅ Keep folder structure in SSD
+        chunk_folder = os.path.join(SSD_UPLOAD_FOLDER, new_folder_name, relative_path)
+        os.makedirs(chunk_folder, exist_ok=True)
 
-        # Ensure SSD directory exists
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        # ✅ Save chunk separately
+        chunk_path = os.path.join(chunk_folder, f"{filename}.part{chunk_index}")
+        chunk.save(chunk_path)
 
-        # Append chunks in the correct order
-        with open(file_path, "ab") as f:
-            f.write(chunk.read())
+        # ✅ Track received chunks in a metadata file
+        meta_file = os.path.join(chunk_folder, "chunks.meta")
+        with open(meta_file, "a") as meta:
+            meta.write(f"{chunk_index}\n")
 
-        logging.info(f"Received chunk {chunk_index + 1}/{total_chunks} for {filename}")
+        logging.info(f"✅ Chunk {chunk_index + 1}/{total_chunks} saved: {chunk_path}")
 
-        # If last chunk, move to HDD
-        if chunk_index == total_chunks - 1:
+        # ✅ Check if all chunks are received
+        with open(meta_file, "r") as meta:
+            received_chunks = {int(line.strip()) for line in meta.readlines()}
+
+        if len(received_chunks) == total_chunks:
+            # ✅ Ensure folder structure in HDD
             final_hdd_path = os.path.join(HDD_STORAGE_FOLDER, new_folder_name, relative_path)
-
-            # Ensure HDD directory exists
             os.makedirs(os.path.dirname(final_hdd_path), exist_ok=True)
 
-            # Move file to HDD
-            shutil.move(file_path, final_hdd_path)
-            logging.info(f"✅ File {filename} moved to HDD: {final_hdd_path}")
+            # ✅ Merge chunks in order
+            with open(final_hdd_path, "wb") as final_file:
+                for i in range(total_chunks):
+                    part_path = os.path.join(chunk_folder, f"{filename}.part{i}")
 
-            # shutil.copy2(file_path, final_hdd_path)  # Copy file with metadata
-            # os.remove(file_path)  # Delete original file from SSD
-            # logging.info(f"✅ Copied and deleted file from SSD: {file_path}")
+                    if not os.path.exists(part_path):
+                        logging.error(f"❌ Missing chunk: {part_path}")
+                        return jsonify({"error": f"Missing chunk {i}"}), 500
+
+                    with open(part_path, "rb") as part_file:
+                        final_file.write(part_file.read())
+
+            logging.info(f"✅ Merged file saved: {final_hdd_path}")
+
+            # ✅ Cleanup chunk files after merging
+            shutil.rmtree(chunk_folder)
 
         return jsonify({"message": f"Chunk {chunk_index + 1}/{total_chunks} received"}), 200
 
