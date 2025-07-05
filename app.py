@@ -1,25 +1,66 @@
 import os
 import shutil
+import json
 import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from werkzeug.utils import safe_join
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend communication
+CORS(app, origins=["https://udaydigital.shop:8085"])
 
-# Paths for SSD (temporary storage) and HDD (final storage)
-SSD_UPLOAD_FOLDER = "./uploads/ssd_temp"  # Fast temporary storage
-HDD_STORAGE_FOLDER = "./mnt/uploads/data"   # Final HDD storage location
+SSD_UPLOAD_FOLDER = "./uploads/ssd_temp"
+HDD_STORAGE_FOLDER = "/mnt/uploads/data"
 
-# Ensure directories exist
 os.makedirs(SSD_UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(HDD_STORAGE_FOLDER, exist_ok=True)
 
-# Increase the max request size (10GB)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024 * 1024  # 10GB
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+def get_chunk_folder(new_folder_name: str, relative_path: str) -> str:
+    # Use safe_join to avoid path traversal attacks
+    return safe_join(SSD_UPLOAD_FOLDER, new_folder_name, relative_path)
+
+
+def get_final_file_path(new_folder_name: str, relative_path: str, filename: str) -> str:
+    return safe_join(HDD_STORAGE_FOLDER, new_folder_name, relative_path, filename)
+
+
+def read_metadata(meta_file_path: str) -> set:
+    if not os.path.exists(meta_file_path):
+        return set()
+    with open(meta_file_path, "r") as f:
+        try:
+            data = json.load(f)
+            return set(data.get("received_chunks", []))
+        except Exception:
+            logging.warning(f"Metadata file corrupted: {meta_file_path}")
+            return set()
+
+
+def write_metadata(meta_file_path: str, received_chunks: set):
+    temp_meta_path = meta_file_path + ".tmp"
+    with open(temp_meta_path, "w") as f:
+        json.dump({"received_chunks": sorted(list(received_chunks))}, f)
+    os.replace(temp_meta_path, meta_file_path)  # atomic replace
+
+
+def merge_chunks(chunk_folder: str, filename: str, total_chunks: int, final_path: str):
+    os.makedirs(os.path.dirname(final_path), exist_ok=True)
+
+    with open(final_path, "wb") as final_file:
+        for i in range(total_chunks):
+            part_path = os.path.join(chunk_folder, f"{filename}.part{i}")
+            if not os.path.exists(part_path):
+                raise FileNotFoundError(f"Missing chunk {i} at {part_path}")
+
+            with open(part_path, "rb") as part_file:
+                shutil.copyfileobj(part_file, final_file)
+
+    logging.info(f"✅ Merged file saved: {final_path}")
 
 
 @app.errorhandler(413)
@@ -40,7 +81,7 @@ def upload_chunk():
 
         chunk = request.files["chunk"]
         filename = request.form.get("filename")
-        relative_path = request.form.get("relativePath")  # Keep original folder structure
+        relative_path = request.form.get("relativePath")
         chunk_index = request.form.get("chunkIndex")
         total_chunks = request.form.get("totalChunks")
         new_folder_name = request.form.get("newFolderName")
@@ -49,49 +90,35 @@ def upload_chunk():
         if not all([filename, relative_path, chunk_index, total_chunks, new_folder_name]):
             return jsonify({"error": "Missing required form data"}), 400
 
-        chunk_index = int(chunk_index)
-        total_chunks = int(total_chunks)
+        try:
+            chunk_index = int(chunk_index)
+            total_chunks = int(total_chunks)
+            if chunk_index < 0 or chunk_index >= total_chunks:
+                return jsonify({"error": "Invalid chunk index"}), 400
+        except ValueError:
+            return jsonify({"error": "Chunk index and total chunks must be integers"}), 400
 
-        # ✅ Keep folder structure in SSD
-        chunk_folder = os.path.join(SSD_UPLOAD_FOLDER, new_folder_name, relative_path)
+        chunk_folder = get_chunk_folder(new_folder_name, relative_path)
         os.makedirs(chunk_folder, exist_ok=True)
 
-        # ✅ Save chunk separately
         chunk_path = os.path.join(chunk_folder, f"{filename}.part{chunk_index}")
         chunk.save(chunk_path)
 
-        # ✅ Track received chunks in a metadata file
         meta_file = os.path.join(chunk_folder, "chunks.meta")
-        with open(meta_file, "a") as meta:
-            meta.write(f"{chunk_index}\n")
+        received_chunks = read_metadata(meta_file)
+        received_chunks.add(chunk_index)
+        write_metadata(meta_file, received_chunks)
 
         logging.info(f"✅ Chunk {chunk_index + 1}/{total_chunks} saved: {chunk_path}")
 
-        # ✅ Check if all chunks are received
-        with open(meta_file, "r") as meta:
-            received_chunks = {int(line.strip()) for line in meta.readlines()}
-
+        # If all chunks received, merge and clean up
         if len(received_chunks) == total_chunks:
-            # ✅ Ensure folder structure in HDD
-            final_hdd_path = os.path.join(HDD_STORAGE_FOLDER, new_folder_name, relative_path)
-            os.makedirs(os.path.dirname(final_hdd_path), exist_ok=True)
+            final_file_path = get_final_file_path(new_folder_name, relative_path, filename)
+            merge_chunks(chunk_folder, filename, total_chunks, final_file_path)
 
-            # ✅ Merge chunks in order
-            with open(final_hdd_path, "wb") as final_file:
-                for i in range(total_chunks):
-                    part_path = os.path.join(chunk_folder, f"{filename}.part{i}")
-
-                    if not os.path.exists(part_path):
-                        logging.error(f"❌ Missing chunk: {part_path}")
-                        return jsonify({"error": f"Missing chunk {i}"}), 500
-
-                    with open(part_path, "rb") as part_file:
-                        final_file.write(part_file.read())
-
-            logging.info(f"✅ Merged file saved: {final_hdd_path}")
-
-            # ✅ Cleanup chunk files after merging
+            # Cleanup chunks and metadata
             shutil.rmtree(chunk_folder)
+            logging.info(f"✅ Cleaned up chunk folder: {chunk_folder}")
 
         return jsonify({"message": f"Chunk {chunk_index + 1}/{total_chunks} received"}), 200
 
