@@ -81,13 +81,17 @@ def upload_chunk():
 
         chunk = request.files["chunk"]
         filename = request.form.get("filename")
-        relative_path = request.form.get("relativePath")
+        raw_path = request.form.get("relativePath", "")
+        # Remove filename to get actual relative folder (if any)
+        relative_path = os.path.dirname(raw_path)
+        if relative_path == ".":
+            relative_path = ""
         chunk_index = request.form.get("chunkIndex")
         total_chunks = request.form.get("totalChunks")
         new_folder_name = request.form.get("newFolderName")
 
         # Validate required form data
-        if not all([filename, relative_path, chunk_index, total_chunks, new_folder_name]):
+        if not all([filename, raw_path, chunk_index, total_chunks, new_folder_name]):
             return jsonify({"error": "Missing required form data"}), 400
 
         try:
